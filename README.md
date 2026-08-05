@@ -1,73 +1,88 @@
 # xml-val-benchmark
 
-Performance comparison for WebAssembly XML validation engines: **xmllint-wasm** vs **xerces-wasm**.
-
-## Overview & Focus Areas
-- **Cold Start:** Initial execution speed including WASM initialization and schema loading.
-- **Warm Loop:** Performance during repeated validations (1,000 iterations) utilizing XSD grammar caching (`xerces-wasm`) vs re-parsing schemas per validation (`xmllint-wasm`).
-- **Single vs Multi-File Schemas:** Benchmarking standalone XSDs vs complex modular XSD architecture (multiple XSD files with `xs:include`).
+Publication-grade performance benchmark comparing WebAssembly XML validation engines: **`xmllint-wasm`** vs **`xerces-wasm`**.
 
 ---
 
-##  Benchmark Results (1,000 Iterations)
+## 🔬 Benchmark Methodology & Rigor
+
+This benchmark enforces standard benchmarking best practices:
+1. **Isolated Subprocess Cold-Starts:** Every cold-start measurement is executed in a dedicated, fresh Node.js subprocess to prevent WASM runtime/module warm contamination across tests.
+2. **Correctness Assertions:** Every iteration asserts that `valid === true`. No engine can short-circuit or report unvalidated execution times.
+3. **Statistical Sampling (n=5 trials):** Warm loops are executed across 5 measurement trials of 1,000 iterations each, reporting `Mean`, `Standard Deviation`, `Min`, and `Max`.
+4. **Interleaved Execution & GC Isolation:** Execution order is alternated (`A -> B`, `B -> A`) between trials, with `global.gc()` triggered before timing blocks to eliminate Garbage Collection pauses and order bias.
+5. **System Metadata Logging:** System hardware, OS kernel, and Node.js runtime environment details are captured.
+
+---
+
+## 📊 Benchmark Results
+
+### Environment Baseline
+- **Hardware:** Apple M4 (arm64)
+- **OS:** Darwin 25.6.0
+- **Runtime:** Node.js v22.22.1 (`--expose-gc`)
+- **Iterations / Trial:** 1,000 | **Measurement Trials:** 5 (Interleaved)
+
+---
 
 ### Test 1: Single Schema Benchmark (`sample.xsd`)
 
-| Engine | Cold Start | Warm Loop (1,000 runs) | Avg / Validation |
-| :--- | :--- | :--- | :--- |
-| **`xmllint-wasm`** | ~29.8 ms | ~20.85 s | ~20.8 ms |
-| **`xerces-wasm`** | ~23.5 ms | **~56.9 ms (0.05 s)** | **~0.057 ms** |
+| Engine | Isolated Cold Start | Warm Loop Mean (± StdDev) | Warm Loop Min / Max | Speedup |
+| :--- | :--- | :--- | :--- | :--- |
+| **`xmllint-wasm`** | 49.45 ms | 22,484.05 ms (±902.97 ms) | 21,632.86 ms / 24,211.91 ms | Baseline |
+| **`xerces-wasm`** | **25.61 ms** | **40.46 ms (±4.49 ms)** | **36.68 ms / 49.19 ms** | **555.6x faster** |
 
 ---
 
 ### Test 2: Multi-File Modular Schemas (4 Included XSDs)
 *Structure:* `order.xsd` (includes `customer.xsd` & `product.xsd`, which includes `address.xsd`).
 
-| Engine | Cold Start + Grammar Cache | Warm Loop (1,000 runs) | Avg / Validation |
-| :--- | :--- | :--- | :--- |
-| **`xmllint-wasm`** | ~27.2 ms | ~21.25 s | ~21.2 ms |
-| **`xerces-wasm`** | ~2.1 ms | **~82.8 ms (0.08 s)** | **~0.083 ms** |
+| Engine | Isolated Cold Start | Warm Loop Mean (± StdDev) | Warm Loop Min / Max | Speedup |
+| :--- | :--- | :--- | :--- | :--- |
+| **`xmllint-wasm`** | 35.28 ms | 23,395.49 ms (±129.34 ms) | 23,191.64 ms / 23,573.36 ms | Baseline |
+| **`xerces-wasm`** | **24.71 ms** | **70.29 ms (±1.12 ms)** | **69.14 ms / 71.91 ms** | **332.8x faster** |
 
 ---
 
-###  Full Benchmark Execution Log
+### 📋 Scientific Output Log
 
 ```text
-==================================================
- XML VALIDATION BENCHMARK SUITE (1000 iterations)
-==================================================
+======================================================================
+ RIGOROUS XML VALIDATION BENCHMARK SUITE
+======================================================================
+ System Info: Darwin 25.6.0 (arm64) | CPU: Apple M4
+ Runtime: Node.js v22.22.1 | Iterations/Trial: 1000 | Trials: 5
+======================================================================
 
---------------------------------------------------
+----------------------------------------------------------------------
  TEST 1: Single Schema Benchmark (sample.xsd)
---------------------------------------------------
+----------------------------------------------------------------------
+ Measuring Isolated Cold Start... Done.
+   - xmllint-wasm cold: 49.45 ms
+   - xerces-wasm cold:  25.61 ms
 
---- Testing xmllint-wasm (Single Schema) ---
-xmllint: Cold First Run: 29.85ms
-xmllint: Loop (1000 runs): 20.845s
+ Running Warm Loop Benchmark (5 trials of 1000 iterations, interleaved)...
+   - xmllint-wasm loop: Mean=22484.05ms (±902.97ms) | Min=21632.86ms | Max=24211.91ms
+   - xerces-wasm loop:  Mean=40.46ms (±4.49ms) | Min=36.68ms | Max=49.19ms
 
---- Testing xerces-wasm (Single Schema) ---
-xerces: Cold Run + Grammar Cache: 23.52ms
-xerces: Loop (1000 runs): 56.88ms
+----------------------------------------------------------------------
+ TEST 2: Multi-File Modular Schemas (4 Included XSDs)
+----------------------------------------------------------------------
+ Measuring Isolated Cold Start... Done.
+   - xmllint-wasm cold: 35.28 ms
+   - xerces-wasm cold:  24.71 ms
 
---------------------------------------------------
- TEST 2: Multi-File Modular Schemas (4 XSDs with includes)
---------------------------------------------------
+ Running Warm Loop Benchmark (5 trials of 1000 iterations, interleaved)...
+   - xmllint-wasm loop: Mean=23395.49ms (±129.34ms) | Min=23191.64ms | Max=23573.36ms
+   - xerces-wasm loop:  Mean=70.29ms (±1.12ms) | Min=69.14ms | Max=71.91ms
 
---- Testing xmllint-wasm (Multi-Schema) ---
-xmllint: Cold First Run: 27.247ms
-xmllint: Loop (1000 runs): 21.250s
-
---- Testing xerces-wasm (Multi-Schema) ---
-xerces: Cold Run + Grammar Cache: 2.115ms
-xerces: Loop (1000 runs): 82.788ms
-
-==================================================
- BENCHMARK SUITE COMPLETED
-==================================================
+======================================================================
+ SUMMARY & RATIOS
+======================================================================
+ Test 1 Warm Loop Speedup: (xmllint 22484.0ms vs xerces 40.5ms) => Xerces is 555.6x faster
+ Test 2 Warm Loop Speedup: (xmllint 23395.5ms vs xerces 70.3ms) => Xerces is 332.8x faster
+======================================================================
 ```
-
-### 💡 Key Takeaway
-In both single-file and multi-file schema architectures, `xerces-wasm` uses `createProjectValidator` to pre-parse XSDs and cache the Grammar Pool in WASM memory. Reusing this cached pool provides a **~250x to ~360x speedup** over `xmllint-wasm` in high-throughput validation scenarios.
 
 ---
 
@@ -103,12 +118,12 @@ npm install
 ```
 
 ### 3. Run Benchmark
-Run the benchmark suite using `npm start` or directly via Node:
+Run the benchmark suite using `npm start` (with `--expose-gc` enabled):
 
 ```bash
 npm start
 ```
-or
+or directly:
 ```bash
-node src/benchmark.js
+node --expose-gc src/benchmark.js
 ```
