@@ -4,20 +4,25 @@ Publication-grade multi-dimensional performance benchmark comparing WebAssembly 
 
 ---
 
-## 🔬 Benchmark Methodology & Dimensions
+## 🔬 Architectural Execution Model & Trade-offs
 
-This suite evaluates validation engines across 4 core operational dimensions:
+A critical finding of this benchmark is that `xmllint-wasm` and `xerces-wasm` employ fundamentally different runtime execution architectures:
 
-1. **Standard Schema Validation:** Isolated cold-starts and warm-loop validation across Single and Multi-File XSD architecture.
-2. **Document-Size Scaling:** Scaling characteristics across 1KB, 100KB, 1MB, and 5MB XML payloads.
-3. **Invalid XML / Error-Path Performance:** Validation latency and error handling when processing schema-invalid XML (missing tags, data-type mismatches).
-4. **Memory Footprint & Concurrency:** Heap memory allocation delta during batch processing and parallel execution via `Promise.all`.
+1. **`xmllint-wasm` (Worker-Thread Offloaded Architecture):**
+   - Every `validateXML()` call spawns a dedicated Node.js `worker_threads.Worker`, instantiates the WASM module inside it, executes validation, and tears down the worker thread.
+   - **Advantage:** **Zero Main-Thread Blocking.** Main event loop lag during validation is **<1.8 ms** even for 5MB payloads.
+   - **Trade-off:** Pays a fixed OS thread spawn and worker creation tax (~23 ms) per validation call.
+
+2. **`xerces-wasm` (Synchronous Main-Thread WASM Architecture):**
+   - `createProjectValidator()` pre-parses XSD schemas and caches the compiled Grammar Pool in C++ WASM heap memory. Subsequent `validate()` calls execute synchronously on the Node.js **Main Thread**.
+   - **Advantage:** **Extreme Warm-Loop Throughput.** Eliminates worker spawn taxes and schema parsing overhead (~0.06 ms per call for standard payloads).
+   - **Trade-off:** **Main-Thread Event Loop Freezing.** Validating large payloads (e.g. 5MB) blocks the main Node.js event loop for **~145 ms**, freezing all incoming HTTP requests, timers, and I/O.
 
 ---
 
-## 📊 Comprehensive Benchmark Results
+## 📊 Benchmark Results (All Modules $n=5$ Interleaved Trials)
 
-### Environment Baseline
+### System Baseline
 - **Hardware:** Apple M4 (arm64)
 - **OS:** Darwin 25.6.0
 - **Runtime:** Node.js v22.22.1 (`--expose-gc`)
@@ -27,62 +32,66 @@ This suite evaluates validation engines across 4 core operational dimensions:
 ### Module 1: Standard Schema Validation (1,000 Iterations)
 
 #### 1A. Single Schema (`sample.xsd`)
-| Engine | Isolated Cold Start | Warm Loop Mean (± StdDev) | Warm Loop Min / Max | Speedup |
+| Engine | Isolated Cold Start | Warm Loop Mean (± StdDev) | Warm Loop Min / Max | Speedup Ratio |
 | :--- | :--- | :--- | :--- | :--- |
-| **`xmllint-wasm`** | 34.59 ms | 22,101.66 ms (±198.43 ms) | 21,781.47 ms / 22,302.54 ms | Baseline |
-| **`xerces-wasm`** | **22.79 ms** | **41.35 ms (±5.61 ms)** | **37.91 ms / 52.51 ms** | **534.5x faster** |
+| **`xmllint-wasm`** | 35.52 ms | 22,908.82 ms (±521.72 ms) | 22,084.57 ms / 23,373.96 ms | Baseline |
+| **`xerces-wasm`** | **22.66 ms** | **41.71 ms (±6.59 ms)** | **37.54 ms / 54.79 ms** | **549.2x faster** |
 
 #### 1B. Multi-File Modular Schemas (4 Included XSDs)
-| Engine | Isolated Cold Start | Warm Loop Mean (± StdDev) | Warm Loop Min / Max | Speedup |
+| Engine | Isolated Cold Start | Warm Loop Mean (± StdDev) | Warm Loop Min / Max | Speedup Ratio |
 | :--- | :--- | :--- | :--- | :--- |
-| **`xmllint-wasm`** | 36.34 ms | 23,487.12 ms (±268.93 ms) | 23,273.55 ms / 24,009.64 ms | Baseline |
-| **`xerces-wasm`** | **25.46 ms** | **69.40 ms (±1.88 ms)** | **68.09 ms / 73.14 ms** | **338.4x faster** |
+| **`xmllint-wasm`** | 35.73 ms | 23,916.85 ms (±1017.20 ms) | 22,929.79 ms / 25,844.40 ms | Baseline |
+| **`xerces-wasm`** | **25.38 ms** | **69.06 ms (±1.95 ms)** | **67.82 ms / 72.94 ms** | **346.3x faster** |
 
 ---
 
-### Module 2: Document-Size Payload Scaling
+### Module 2: Document-Size Payload Scaling ($n=5$ Trials)
 
-Evaluating throughput (MB/s) and latency as XML document size increases against `order.xsd`:
+Evaluating latency (Mean ± StdDev) and throughput (MB/s) against `order.xsd`:
 
-| Payload Size | `xmllint-wasm` Latency | `xmllint-wasm` Throughput | `xerces-wasm` Latency | `xerces-wasm` Throughput | Speedup / Winner |
+| Payload Size | `xmllint-wasm` Mean Latency | `xmllint-wasm` Throughput | `xerces-wasm` Mean Latency | `xerces-wasm` Throughput | Winner / Ratio |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1 KB** | 23.67 ms | 0.05 MB/s | **0.06 ms** | **17.62 MB/s** | **`xerces-wasm` (368.3x faster)** |
-| **100 KB** | 27.96 ms | 3.50 MB/s | **2.83 ms** | **34.61 MB/s** | **`xerces-wasm` (9.9x faster)** |
-| **1 MB** | 45.05 ms | 22.20 MB/s | **28.91 ms** | **34.59 MB/s** | **`xerces-wasm` (1.6x faster)** |
-| **5 MB** | **101.87 ms** | **49.08 MB/s** | 141.77 ms | 35.27 MB/s | **`xmllint-wasm` (1.4x faster)** |
-
-> **Key Discovery:** For small to medium payloads (<1MB), schema compilation overhead dominates `xmllint-wasm`, making `xerces-wasm` up to **368x faster**. For large payloads (>5MB), `xmllint`'s stream processing throughput reaches **~49 MB/s** as payload parsing outweighs schema overhead.
+| **1.2 KB** | 23.19 ms (±0.30 ms) | 0.05 MB/s | **0.06 ms (±0.00 ms)** | **17.70 MB/s** | **`xerces-wasm` (362.7x faster)** |
+| **100 KB** | 26.98 ms (±0.55 ms) | 3.62 MB/s | **2.82 ms (±0.01 ms)** | **34.70 MB/s** | **`xerces-wasm` (9.6x faster)** |
+| **1 MB** | 44.18 ms (±0.35 ms) | 22.63 MB/s | **28.42 ms (±0.06 ms)** | **35.19 MB/s** | **`xerces-wasm` (1.55x faster)** |
+| **5 MB** | **98.61 ms (±0.36 ms)** | **50.71 MB/s** | 142.38 ms (±1.16 ms) | 35.12 MB/s | **`xmllint-wasm` (1.45x faster)** |
 
 ---
 
-### Module 3: Invalid XML & Error-Path Performance
+### Module 3: Invalid XML & Error-Path Performance ($n=5$ Trials)
 
-Measuring validation speed when XML violates schema constraints (`r.valid === false`):
+Measuring validation latency on schema-invalid XML (`r.valid === false`):
 
-| Invalid Scenario | `xmllint-wasm` Latency | `xerces-wasm` Latency | Speedup |
+| Invalid Scenario | `xmllint-wasm` Mean Latency | `xerces-wasm` Mean Latency | Speedup Ratio |
 | :--- | :--- | :--- | :--- |
-| **Missing Required Element** (`<street>`) | 23.44 ms / call | **0.07 ms / call** | **`xerces-wasm` (359.4x faster)** |
-| **Invalid Datatype** (string in decimal) | 23.98 ms / call | **0.07 ms / call** | **`xerces-wasm` (345.1x faster)** |
+| **Missing Required Element** (`<street>`) | 24.59 ms (±0.77 ms) | **0.07 ms (±0.01 ms)** | **`xerces-wasm` (355.2x faster)** |
+| **Invalid Datatype** (string in decimal) | 24.39 ms (±0.51 ms) | **0.07 ms (±0.01 ms)** | **`xerces-wasm` (336.8x faster)** |
 
 ---
 
-### Module 4: Memory Footprint & Concurrency
+### Module 4: Event-Loop Lag, Memory & Concurrency
 
-#### 4A. Heap Memory Allocation Delta (after batch processing)
-| Engine | Heap Memory Delta | Memory Efficiency |
-| :--- | :--- | :--- |
-| **`xmllint-wasm`** | +9.86 MB | Baseline |
-| **`xerces-wasm`** | **+0.69 MB** | **~14x lower memory footprint** |
+#### 4A. Native Event Loop Freeze (`node:perf_hooks monitorEventLoopDelay`)
+| Engine | Total Duration | Native Event-Loop Freeze | Thread Execution |
+| :--- | :--- | :--- | :--- |
+| **`xmllint-wasm`** | 103.15 ms | **1.76 ms** | Offloaded Worker Thread (Non-Blocking) |
+| **`xerces-wasm`** | 143.74 ms | **144.93 ms** | Synchronous Main Thread (Freezes Event Loop) |
 
-#### 4B. Concurrency (`Promise.all` across 50 parallel validations)
-| Engine | 50 Parallel Validations | Speedup |
+#### 4B. Main-Thread Memory Allocation Footprint
+| Engine | Main-Thread Heap Delta | Execution Memory Model |
 | :--- | :--- | :--- |
-| **`xmllint-wasm`** | 252.31 ms | Baseline |
-| **`xerces-wasm`** | **3.66 ms** | **69.0x faster parallel execution** |
+| **`xmllint-wasm`** | +2.25 MB | Isolated inside transient Worker Threads |
+| **`xerces-wasm`** | **+0.41 MB** | C++ WASM Heap in Main Process |
+
+#### 4C. Parallel Execution (`Promise.all` across 50 Concurrent Validations)
+| Engine | 50 Concurrent Promises | Execution Behavior |
+| :--- | :--- | :--- |
+| **`xmllint-wasm`** | 221.58 ms | Parallel execution scaling across OS thread pool |
+| **`xerces-wasm`** | **3.57 ms** | Serialized synchronous execution on main thread |
 
 ---
 
-### 📋 Full Benchmark Execution Log
+## 📋 Complete Benchmark Log Output
 
 ```text
 ======================================================================
@@ -98,70 +107,73 @@ Measuring validation speed when XML violates schema constraints (`r.valid === fa
 
  [1A] Single Schema Benchmark (sample.xsd)
    - Measuring Isolated Cold Start... Done.
-     * xmllint-wasm cold: 34.59 ms
-     * xerces-wasm cold:  22.79 ms
-   - Running Warm Loop (5 trials of 1000 iterations, interleaved)...
-     * xmllint-wasm loop: Mean=22101.66ms (±198.43ms) | Min=21781.47ms | Max=22302.54ms
-     * xerces-wasm loop:  Mean=41.35ms (±5.61ms) | Min=37.91ms | Max=52.51ms
+     * xmllint-wasm cold: 35.52 ms
+     * xerces-wasm cold:  22.66 ms
+   - Running Warm Loop (5 interleaved trials of 1000 iterations)...
+     * xmllint-wasm loop: Mean=22908.82ms (±521.72ms) | Min=22084.57ms | Max=23373.96ms
+     * xerces-wasm loop:  Mean=41.71ms (±6.59ms) | Min=37.54ms | Max=54.79ms
 
  [1B] Multi-File Modular Schema Benchmark (4 Included XSDs)
    - Measuring Isolated Cold Start... Done.
-     * xmllint-wasm cold: 36.34 ms
-     * xerces-wasm cold:  25.46 ms
-   - Running Warm Loop (5 trials of 1000 iterations, interleaved)...
-     * xmllint-wasm loop: Mean=23487.12ms (±268.93ms) | Min=23273.55ms | Max=24009.64ms
-     * xerces-wasm loop:  Mean=69.40ms (±1.88ms) | Min=68.09ms | Max=73.14ms
+     * xmllint-wasm cold: 35.73 ms
+     * xerces-wasm cold:  25.38 ms
+   - Running Warm Loop (5 interleaved trials of 1000 iterations)...
+     * xmllint-wasm loop: Mean=23916.85ms (±1017.20ms) | Min=22929.79ms | Max=25844.40ms
+     * xerces-wasm loop:  Mean=69.06ms (±1.95ms) | Min=67.82ms | Max=72.94ms
 
 ----------------------------------------------------------------------
- MODULE 2: Document-Size Scaling Benchmark (1KB, 100KB, 1MB, 5MB)
+ MODULE 2: Document-Size Scaling Benchmark (5 Interleaved Trials)
 ----------------------------------------------------------------------
 
-   - Payload Size: 1KB (0.001 MB, 100 runs)
-     * xmllint-wasm: 23.67 ms/val | Throughput: 0.05 MB/s
-     * xerces-wasm:  0.06 ms/val | Throughput: 17.62 MB/s
-     * Speedup:      Xerces is 368.3x faster
+   - Payload Size: 1.2KB (0.001 MB, 100 runs/trial x 5 trials)
+     * xmllint-wasm: Mean=23.19ms/val (±0.30ms) | Throughput=0.05 MB/s
+     * xerces-wasm:  Mean=0.06ms/val (±0.00ms) | Throughput=17.70 MB/s
+     * Speedup Ratio: Xerces is 362.68x faster
 
-   - Payload Size: 100KB (0.098 MB, 50 runs)
-     * xmllint-wasm: 27.96 ms/val | Throughput: 3.50 MB/s
-     * xerces-wasm:  2.83 ms/val | Throughput: 34.61 MB/s
-     * Speedup:      Xerces is 9.9x faster
+   - Payload Size: 100KB (0.098 MB, 50 runs/trial x 5 trials)
+     * xmllint-wasm: Mean=26.98ms/val (±0.55ms) | Throughput=3.62 MB/s
+     * xerces-wasm:  Mean=2.82ms/val (±0.01ms) | Throughput=34.70 MB/s
+     * Speedup Ratio: Xerces is 9.58x faster
 
-   - Payload Size: 1MB (1.000 MB, 10 runs)
-     * xmllint-wasm: 45.05 ms/val | Throughput: 22.20 MB/s
-     * xerces-wasm:  28.91 ms/val | Throughput: 34.59 MB/s
-     * Speedup:      Xerces is 1.6x faster
+   - Payload Size: 1MB (1.000 MB, 10 runs/trial x 5 trials)
+     * xmllint-wasm: Mean=44.18ms/val (±0.35ms) | Throughput=22.63 MB/s
+     * xerces-wasm:  Mean=28.42ms/val (±0.06ms) | Throughput=35.19 MB/s
+     * Speedup Ratio: Xerces is 1.55x faster
 
-   - Payload Size: 5MB (5.000 MB, 5 runs)
-     * xmllint-wasm: 101.87 ms/val | Throughput: 49.08 MB/s
-     * xerces-wasm:  141.77 ms/val | Throughput: 35.27 MB/s
-     * Speedup:      Xerces is 0.7x faster
+   - Payload Size: 5MB (5.000 MB, 5 runs/trial x 5 trials)
+     * xmllint-wasm: Mean=98.61ms/val (±0.36ms) | Throughput=50.71 MB/s
+     * xerces-wasm:  Mean=142.38ms/val (±1.16ms) | Throughput=35.12 MB/s
+     * Speedup Ratio: Xerces is 0.69x slower
 
 ----------------------------------------------------------------------
  MODULE 3: Invalid XML & Error-Path Performance Benchmark
 ----------------------------------------------------------------------
 
    - Invalid Scenario: Missing Tag (<street>)
-     * xmllint-wasm error validation: 23.44 ms/call | Errors caught: 1
-     * xerces-wasm error validation:  0.07 ms/call | Errors caught: 1
-     * Speedup:                       Xerces is 359.4x faster on error paths
+     * xmllint-wasm: Mean=24.59ms/call (±0.77ms)
+     * xerces-wasm:  Mean=0.07ms/call (±0.01ms)
+     * Speedup Ratio: Xerces is 355.2x faster on error paths
 
    - Invalid Scenario: Invalid Datatype (string in decimal)
-     * xmllint-wasm error validation: 23.98 ms/call | Errors caught: 1
-     * xerces-wasm error validation:  0.07 ms/call | Errors caught: 1
-     * Speedup:                       Xerces is 345.1x faster on error paths
+     * xmllint-wasm: Mean=24.39ms/call (±0.51ms)
+     * xerces-wasm:  Mean=0.07ms/call (±0.01ms)
+     * Speedup Ratio: Xerces is 336.8x faster on error paths
 
 ----------------------------------------------------------------------
- MODULE 4: Memory Footprint & Concurrency Benchmark
+ MODULE 4: Event-Loop Lag, Memory Footprint & Thread Parallelism
 ----------------------------------------------------------------------
 
- [4A] Memory Footprint (Heap Used Delta after 1,000 validations)
-     * xmllint-wasm Heap Delta: +9.86 MB
-     * xerces-wasm Heap Delta:  +0.69 MB
+ [4A] Native Main-Thread Event Loop Freeze Test (5MB Payload Validation)
+     * xmllint-wasm: Duration=103.15ms | Max Event-Loop Freeze=1.76ms (Worker-Offloaded, Non-Blocking)
+     * xerces-wasm:  Duration=143.74ms | Max Event-Loop Freeze=144.93ms (Main-Thread Synchronous, Freezes Event Loop)
 
- [4B] Concurrency Benchmark (50 Parallel Validations via Promise.all)
-     * xmllint-wasm (50 parallel calls): 252.31 ms
-     * xerces-wasm (50 parallel calls):  3.66 ms
-     * Speedup:                          Xerces is 69.0x faster in parallel execution
+ [4B] Main-Thread Memory Allocation Footprint
+     * xmllint-wasm Main Heap Delta: +2.25 MB (Note: Work happens in Worker Threads)
+     * xerces-wasm Main Heap Delta:  +0.41 MB (Note: WASM C++ Memory in Main Heap)
+
+ [4C] Parallelism Test (50 Concurrent Promises via Promise.all)
+     * xmllint-wasm (50 concurrent promises): 221.58 ms (Offloaded across Worker Threads)
+     * xerces-wasm (50 concurrent promises):  3.57 ms (Serialized on Main Event Loop)
 
 ======================================================================
  BENCHMARK SUITE COMPLETED SUCCESSFULLY

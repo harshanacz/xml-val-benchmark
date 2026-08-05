@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
-import { performance } from 'perf_hooks';
+import { performance, monitorEventLoopDelay } from 'perf_hooks';
 
 // --- Fixture Paths ---
 const singleXsdPath = path.resolve('tests/schemas/sample.xsd');
@@ -29,7 +29,7 @@ const invalidMissingTagContent = fs.readFileSync(path.resolve('tests/fixtures/in
 const invalidDatatypeContent = fs.readFileSync(path.resolve('tests/fixtures/invalid-datatype.xml'), 'utf-8');
 
 const scaledFixtures = {
-    '1KB': fs.readFileSync(path.resolve('tests/fixtures/generated/order-1kb.xml'), 'utf-8'),
+    '1.2KB': fs.readFileSync(path.resolve('tests/fixtures/generated/order-1kb.xml'), 'utf-8'),
     '100KB': fs.readFileSync(path.resolve('tests/fixtures/generated/order-100kb.xml'), 'utf-8'),
     '1MB': fs.readFileSync(path.resolve('tests/fixtures/generated/order-1mb.xml'), 'utf-8'),
     '5MB': fs.readFileSync(path.resolve('tests/fixtures/generated/order-5mb.xml'), 'utf-8'),
@@ -104,6 +104,24 @@ function gc() {
     }
 }
 
+// Native Node.js perf_hooks monitorEventLoopDelay helper
+async function measureEventLoopLag(fn) {
+    const h = monitorEventLoopDelay({ resolution: 10 });
+    h.enable();
+    await new Promise(r => setTimeout(r, 20));
+
+    const start = performance.now();
+    await fn();
+    const duration = performance.now() - start;
+
+    await new Promise(r => setTimeout(r, 20));
+    h.disable();
+
+    const rawMaxMs = h.max / 1e6;
+    const maxLagMs = Math.max(0, rawMaxMs - 10);
+    return { duration, maxLagMs };
+}
+
 const MEASURE_TRIALS = 5;
 const LOOP_ITERATIONS = 1000;
 
@@ -116,7 +134,7 @@ async function main() {
     console.log(`======================================================================\n`);
 
     // ==================================================================
-    // MODULE 1: Standard Schema Validation Tests
+    // MODULE 1: Standard Schema Validation
     // ==================================================================
     console.log(`----------------------------------------------------------------------`);
     console.log(` MODULE 1: Standard Schema Validation`);
@@ -131,7 +149,7 @@ async function main() {
     console.log(`     * xmllint-wasm cold: ${singleXmllintCold.toFixed(2)} ms`);
     console.log(`     * xerces-wasm cold:  ${singleXercesCold.toFixed(2)} ms`);
 
-    console.log(`   - Running Warm Loop (${MEASURE_TRIALS} trials of ${LOOP_ITERATIONS} iterations, interleaved)...`);
+    console.log(`   - Running Warm Loop (${MEASURE_TRIALS} interleaved trials of ${LOOP_ITERATIONS} iterations)...`);
     const singleXmllintTimes = [];
     const singleXercesTimes = [];
 
@@ -190,7 +208,7 @@ async function main() {
     console.log(`     * xmllint-wasm cold: ${multiXmllintCold.toFixed(2)} ms`);
     console.log(`     * xerces-wasm cold:  ${multiXercesCold.toFixed(2)} ms`);
 
-    console.log(`   - Running Warm Loop (${MEASURE_TRIALS} trials of ${LOOP_ITERATIONS} iterations, interleaved)...`);
+    console.log(`   - Running Warm Loop (${MEASURE_TRIALS} interleaved trials of ${LOOP_ITERATIONS} iterations)...`);
     const multiXmllintTimes = [];
     const multiXercesTimes = [];
 
@@ -241,14 +259,14 @@ async function main() {
     console.log(`     * xerces-wasm loop:  Mean=${mXerces.mean.toFixed(2)}ms (±${mXerces.stddev.toFixed(2)}ms) | Min=${mXerces.min.toFixed(2)}ms | Max=${mXerces.max.toFixed(2)}ms`);
 
     // ==================================================================
-    // MODULE 2: Document-Size Scaling Benchmark (1KB to 5MB)
+    // MODULE 2: Document-Size Scaling Benchmark (with n=5 Interleaved Trials)
     // ==================================================================
     console.log(`\n----------------------------------------------------------------------`);
-    console.log(` MODULE 2: Document-Size Scaling Benchmark (1KB, 100KB, 1MB, 5MB)`);
+    console.log(` MODULE 2: Document-Size Scaling Benchmark (${MEASURE_TRIALS} Interleaved Trials)`);
     console.log(`----------------------------------------------------------------------`);
 
     const scaleConfigs = [
-        { label: '1KB', content: scaledFixtures['1KB'], runs: 100 },
+        { label: '1.2KB', content: scaledFixtures['1.2KB'], runs: 100 },
         { label: '100KB', content: scaledFixtures['100KB'], runs: 50 },
         { label: '1MB', content: scaledFixtures['1MB'], runs: 10 },
         { label: '5MB', content: scaledFixtures['5MB'], runs: 5 }
@@ -258,33 +276,57 @@ async function main() {
 
     for (const sc of scaleConfigs) {
         const sizeMb = Buffer.byteLength(sc.content, 'utf-8') / (1024 * 1024);
-        console.log(`\n   - Payload Size: ${sc.label} (${sizeMb.toFixed(3)} MB, ${sc.runs} runs)`);
+        console.log(`\n   - Payload Size: ${sc.label} (${sizeMb.toFixed(3)} MB, ${sc.runs} runs/trial x ${MEASURE_TRIALS} trials)`);
 
-        // xmllint
-        gc();
-        const t0 = performance.now();
-        for (let i = 0; i < sc.runs; i++) {
-            const r = await xmllintValidate({ xml: sc.content, schema: [multiFilesMap['order.xsd']], preload: multiPreloadList });
-            if (!r.valid) throw new Error(`xmllint scale ${sc.label} failed`);
+        const scaleXmllintAvgs = [];
+        const scaleXercesAvgs = [];
+
+        for (let t = 0; t < MEASURE_TRIALS; t++) {
+            const xmllintFirst = t % 2 === 0;
+            if (xmllintFirst) {
+                gc();
+                const t0 = performance.now();
+                for (let i = 0; i < sc.runs; i++) {
+                    const r = await xmllintValidate({ xml: sc.content, schema: [multiFilesMap['order.xsd']], preload: multiPreloadList });
+                    if (!r.valid) throw new Error(`xmllint scale ${sc.label} failed`);
+                }
+                scaleXmllintAvgs.push((performance.now() - t0) / sc.runs);
+
+                gc();
+                const t1 = performance.now();
+                for (let i = 0; i < sc.runs; i++) {
+                    const r = await xercesScaleVal.validate(sc.content);
+                    if (!r.valid) throw new Error(`xerces scale ${sc.label} failed`);
+                }
+                scaleXercesAvgs.push((performance.now() - t1) / sc.runs);
+            } else {
+                gc();
+                const t1 = performance.now();
+                for (let i = 0; i < sc.runs; i++) {
+                    const r = await xercesScaleVal.validate(sc.content);
+                    if (!r.valid) throw new Error(`xerces scale ${sc.label} failed`);
+                }
+                scaleXercesAvgs.push((performance.now() - t1) / sc.runs);
+
+                gc();
+                const t0 = performance.now();
+                for (let i = 0; i < sc.runs; i++) {
+                    const r = await xmllintValidate({ xml: sc.content, schema: [multiFilesMap['order.xsd']], preload: multiPreloadList });
+                    if (!r.valid) throw new Error(`xmllint scale ${sc.label} failed`);
+                }
+                scaleXmllintAvgs.push((performance.now() - t0) / sc.runs);
+            }
         }
-        const xmllintTotal = performance.now() - t0;
-        const xmllintAvg = xmllintTotal / sc.runs;
-        const xmllintMBps = (sizeMb * sc.runs) / (xmllintTotal / 1000);
 
-        // xerces
-        gc();
-        const t1 = performance.now();
-        for (let i = 0; i < sc.runs; i++) {
-            const r = await xercesScaleVal.validate(sc.content);
-            if (!r.valid) throw new Error(`xerces scale ${sc.label} failed`);
-        }
-        const xercesTotal = performance.now() - t1;
-        const xercesAvg = xercesTotal / sc.runs;
-        const xercesMBps = (sizeMb * sc.runs) / (xercesTotal / 1000);
+        const stXmllint = stats(scaleXmllintAvgs);
+        const stXerces = stats(scaleXercesAvgs);
 
-        console.log(`     * xmllint-wasm: ${xmllintAvg.toFixed(2)} ms/val | Throughput: ${xmllintMBps.toFixed(2)} MB/s`);
-        console.log(`     * xerces-wasm:  ${xercesAvg.toFixed(2)} ms/val | Throughput: ${xercesMBps.toFixed(2)} MB/s`);
-        console.log(`     * Speedup:      Xerces is ${(xmllintAvg / xercesAvg).toFixed(1)}x faster`);
+        const xmllintMBps = sizeMb / (stXmllint.mean / 1000);
+        const xercesMBps = sizeMb / (stXerces.mean / 1000);
+
+        console.log(`     * xmllint-wasm: Mean=${stXmllint.mean.toFixed(2)}ms/val (±${stXmllint.stddev.toFixed(2)}ms) | Throughput=${xmllintMBps.toFixed(2)} MB/s`);
+        console.log(`     * xerces-wasm:  Mean=${stXerces.mean.toFixed(2)}ms/val (±${stXerces.stddev.toFixed(2)}ms) | Throughput=${xercesMBps.toFixed(2)} MB/s`);
+        console.log(`     * Speedup Ratio: Xerces is ${(stXmllint.mean / stXerces.mean).toFixed(2)}x ${stXmllint.mean > stXerces.mean ? 'faster' : 'slower'}`);
     }
     xercesScaleVal.destroy();
 
@@ -305,47 +347,89 @@ async function main() {
     for (const inv of invalidCases) {
         console.log(`\n   - Invalid Scenario: ${inv.name}`);
 
-        // xmllint error check
-        const xmllintRes = await xmllintValidate({ xml: inv.xml, schema: [multiFilesMap['order.xsd']], preload: multiPreloadList });
-        if (xmllintRes.valid) throw new Error(`xmllint expected invalid but passed: ${inv.name}`);
+        const errXmllintAvgs = [];
+        const errXercesAvgs = [];
 
-        gc();
-        const t0 = performance.now();
-        for (let i = 0; i < 500; i++) {
-            await xmllintValidate({ xml: inv.xml, schema: [multiFilesMap['order.xsd']], preload: multiPreloadList });
+        for (let t = 0; t < MEASURE_TRIALS; t++) {
+            const xmllintFirst = t % 2 === 0;
+            if (xmllintFirst) {
+                gc();
+                const t0 = performance.now();
+                for (let i = 0; i < 200; i++) {
+                    const r = await xmllintValidate({ xml: inv.xml, schema: [multiFilesMap['order.xsd']], preload: multiPreloadList });
+                    if (r.valid) throw new Error('xmllint expected invalid');
+                }
+                errXmllintAvgs.push((performance.now() - t0) / 200);
+
+                gc();
+                const t1 = performance.now();
+                for (let i = 0; i < 200; i++) {
+                    const r = await xercesErrVal.validate(inv.xml);
+                    if (r.valid) throw new Error('xerces expected invalid');
+                }
+                errXercesAvgs.push((performance.now() - t1) / 200);
+            } else {
+                gc();
+                const t1 = performance.now();
+                for (let i = 0; i < 200; i++) {
+                    const r = await xercesErrVal.validate(inv.xml);
+                    if (r.valid) throw new Error('xerces expected invalid');
+                }
+                errXercesAvgs.push((performance.now() - t1) / 200);
+
+                gc();
+                const t0 = performance.now();
+                for (let i = 0; i < 200; i++) {
+                    const r = await xmllintValidate({ xml: inv.xml, schema: [multiFilesMap['order.xsd']], preload: multiPreloadList });
+                    if (r.valid) throw new Error('xmllint expected invalid');
+                }
+                errXmllintAvgs.push((performance.now() - t0) / 200);
+            }
         }
-        const xmllintErrTime = (performance.now() - t0) / 500;
 
-        // xerces error check
-        const xercesRes = await xercesErrVal.validate(inv.xml);
-        if (xercesRes.valid) throw new Error(`xerces expected invalid but passed: ${inv.name}`);
+        const stXmllintErr = stats(errXmllintAvgs);
+        const stXercesErr = stats(errXercesAvgs);
 
-        gc();
-        const t1 = performance.now();
-        for (let i = 0; i < 500; i++) {
-            await xercesErrVal.validate(inv.xml);
-        }
-        const xercesErrTime = (performance.now() - t1) / 500;
-
-        console.log(`     * xmllint-wasm error validation: ${xmllintErrTime.toFixed(2)} ms/call | Errors caught: ${xmllintRes.errors?.length || 1}`);
-        console.log(`     * xerces-wasm error validation:  ${xercesErrTime.toFixed(2)} ms/call | Errors caught: ${xercesRes.schemaErrors?.length || 1}`);
-        console.log(`     * Speedup:                       Xerces is ${(xmllintErrTime / xercesErrTime).toFixed(1)}x faster on error paths`);
+        console.log(`     * xmllint-wasm: Mean=${stXmllintErr.mean.toFixed(2)}ms/call (±${stXmllintErr.stddev.toFixed(2)}ms)`);
+        console.log(`     * xerces-wasm:  Mean=${stXercesErr.mean.toFixed(2)}ms/call (±${stXercesErr.stddev.toFixed(2)}ms)`);
+        console.log(`     * Speedup Ratio: Xerces is ${(stXmllintErr.mean / stXercesErr.mean).toFixed(1)}x faster on error paths`);
     }
     xercesErrVal.destroy();
 
     // ==================================================================
-    // MODULE 4: Memory Footprint & Concurrency Benchmark
+    // MODULE 4: Event-Loop Lag, Memory Footprint & Thread Parallelism
     // ==================================================================
     console.log(`\n----------------------------------------------------------------------`);
-    console.log(` MODULE 4: Memory Footprint & Concurrency Benchmark`);
+    console.log(` MODULE 4: Event-Loop Lag, Memory Footprint & Thread Parallelism`);
     console.log(`----------------------------------------------------------------------`);
 
-    // Memory Footprint
-    console.log(`\n [4A] Memory Footprint (Heap Used Delta after 1,000 validations)`);
+    // 4A. Native Native Event Loop Lag Test via node:perf_hooks monitorEventLoopDelay
+    console.log(`\n [4A] Native Main-Thread Event Loop Freeze Test (5MB Payload Validation)`);
+
+    const xercesLagVal = await createProjectValidator({ entry: 'order.xsd', files: multiFilesMap });
+    
+    gc();
+    const xmllintLag = await measureEventLoopLag(async () => {
+        const r = await xmllintValidate({ xml: scaledFixtures['5MB'], schema: [multiFilesMap['order.xsd']], preload: multiPreloadList });
+        if (!r.valid) throw new Error('xmllint 5MB lag check failed');
+    });
+
+    gc();
+    const xercesLag = await measureEventLoopLag(async () => {
+        const r = await xercesLagVal.validate(scaledFixtures['5MB']);
+        if (!r.valid) throw new Error('xerces 5MB lag check failed');
+    });
+    xercesLagVal.destroy();
+
+    console.log(`     * xmllint-wasm: Duration=${xmllintLag.duration.toFixed(2)}ms | Max Event-Loop Freeze=${xmllintLag.maxLagMs.toFixed(2)}ms (Worker-Offloaded, Non-Blocking)`);
+    console.log(`     * xerces-wasm:  Duration=${xercesLag.duration.toFixed(2)}ms | Max Event-Loop Freeze=${xercesLag.maxLagMs.toFixed(2)}ms (Main-Thread Synchronous, Freezes Event Loop)`);
+
+    // 4B. Memory Footprint
+    console.log(`\n [4B] Main-Thread Memory Allocation Footprint`);
     
     gc();
     const mem0 = process.memoryUsage();
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 300; i++) {
         await xmllintValidate({ xml: multiXmlContent, schema: [multiFilesMap['order.xsd']], preload: multiPreloadList });
     }
     const mem1 = process.memoryUsage();
@@ -354,20 +438,19 @@ async function main() {
     gc();
     const xercesMemVal = await createProjectValidator({ entry: 'order.xsd', files: multiFilesMap });
     const mem2 = process.memoryUsage();
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 300; i++) {
         await xercesMemVal.validate(multiXmlContent);
     }
     const mem3 = process.memoryUsage();
     const xercesHeapMb = (mem3.heapUsed - mem2.heapUsed) / (1024 * 1024);
     xercesMemVal.destroy();
 
-    console.log(`     * xmllint-wasm Heap Delta: ${xmllintHeapMb > 0 ? '+' : ''}${xmllintHeapMb.toFixed(2)} MB`);
-    console.log(`     * xerces-wasm Heap Delta:  ${xercesHeapMb > 0 ? '+' : ''}${xercesHeapMb.toFixed(2)} MB`);
+    console.log(`     * xmllint-wasm Main Heap Delta: ${xmllintHeapMb > 0 ? '+' : ''}${xmllintHeapMb.toFixed(2)} MB (Note: Work happens in Worker Threads)`);
+    console.log(`     * xerces-wasm Main Heap Delta:  ${xercesHeapMb > 0 ? '+' : ''}${xercesHeapMb.toFixed(2)} MB (Note: WASM C++ Memory in Main Heap)`);
 
-    // Concurrency
-    console.log(`\n [4B] Concurrency Benchmark (50 Parallel Validations via Promise.all)`);
+    // 4C. Concurrency & Worker-Thread Parallelism
+    console.log(`\n [4C] Parallelism Test (50 Concurrent Promises via Promise.all)`);
 
-    // xmllint parallel
     gc();
     const conc0 = performance.now();
     const xmllintPromises = Array.from({ length: 50 }, () =>
@@ -377,7 +460,6 @@ async function main() {
     const xmllintConcTime = performance.now() - conc0;
     if (!xmllintConcRes.every(r => r.valid)) throw new Error('xmllint concurrent failed');
 
-    // xerces parallel
     gc();
     const xercesConcVal = await createProjectValidator({ entry: 'order.xsd', files: multiFilesMap });
     const conc1 = performance.now();
@@ -387,9 +469,8 @@ async function main() {
     if (!xercesConcRes.every(r => r.valid)) throw new Error('xerces concurrent failed');
     xercesConcVal.destroy();
 
-    console.log(`     * xmllint-wasm (50 parallel calls): ${xmllintConcTime.toFixed(2)} ms`);
-    console.log(`     * xerces-wasm (50 parallel calls):  ${xercesConcTime.toFixed(2)} ms`);
-    console.log(`     * Speedup:                          Xerces is ${(xmllintConcTime / xercesConcTime).toFixed(1)}x faster in parallel execution`);
+    console.log(`     * xmllint-wasm (50 concurrent promises): ${xmllintConcTime.toFixed(2)} ms (Offloaded across Worker Threads)`);
+    console.log(`     * xerces-wasm (50 concurrent promises):  ${xercesConcTime.toFixed(2)} ms (Serialized on Main Event Loop)`);
 
     console.log(`\n======================================================================`);
     console.log(` BENCHMARK SUITE COMPLETED SUCCESSFULLY`);
