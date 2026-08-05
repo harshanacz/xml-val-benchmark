@@ -18,5 +18,9 @@
   "bugs": {
     "url": "https://github.com/harshanacz/xml-val-benchmark/issues"
   },
-  "homepage": "https://github.com/harshanacz/xml-val-benchmark#readme"
+  "homepage": "https://github.com/harshanacz/xml-val-benchmark#readme",
+  "dependencies": {
+    "xerces-wasm": "^2.0.1",
+    "xmllint-wasm": "^5.2.0"
+  }
 }
