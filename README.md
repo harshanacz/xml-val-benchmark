@@ -4,43 +4,92 @@ Performance comparison for WebAssembly XML validation engines: **xmllint-wasm** 
 
 ## Overview & Focus Areas
 - **Cold Start:** Initial execution speed including WASM initialization and schema loading.
-- **Warm Loop:** Performance during repeated validations (1000 iterations) utilizing XSD grammar caching (`xerces-wasm`) vs re-parsing schemas per validation (`xmllint-wasm`).
+- **Warm Loop:** Performance during repeated validations (1,000 iterations) utilizing XSD grammar caching (`xerces-wasm`) vs re-parsing schemas per validation (`xmllint-wasm`).
+- **Single vs Multi-File Schemas:** Benchmarking standalone XSDs vs complex modular XSD architecture (multiple XSD files with `xs:include`).
 
 ---
 
-##  Benchmark Results
+##  Benchmark Results (1,000 Iterations)
 
-Test run with **1,000 iterations** validating XML against an XSD schema:
+### Test 1: Single Schema Benchmark (`sample.xsd`)
 
-| Engine | Cold Start / First Run | Warm Loop (1,000 runs) | Avg Time / Validation |
+| Engine | Cold Start | Warm Loop (1,000 runs) | Avg / Validation |
 | :--- | :--- | :--- | :--- |
-| **`xmllint-wasm`** | ~36.2 ms | ~19,968 ms (19.97 s) | ~19.9 ms |
-| **`xerces-wasm`** | ~24.1 ms | **~50 ms (0.05 s)** | **~0.05 ms** |
+| **`xmllint-wasm`** | ~29.8 ms | ~20.85 s | ~20.8 ms |
+| **`xerces-wasm`** | ~23.5 ms | **~56.9 ms (0.05 s)** | **~0.057 ms** |
 
-### Execution Log Output
+---
+
+### Test 2: Multi-File Modular Schemas (4 Included XSDs)
+*Structure:* `order.xsd` (includes `customer.xsd` & `product.xsd`, which includes `address.xsd`).
+
+| Engine | Cold Start + Grammar Cache | Warm Loop (1,000 runs) | Avg / Validation |
+| :--- | :--- | :--- | :--- |
+| **`xmllint-wasm`** | ~27.2 ms | ~21.25 s | ~21.2 ms |
+| **`xerces-wasm`** | ~2.1 ms | **~82.8 ms (0.08 s)** | **~0.083 ms** |
+
+---
+
+###  Full Benchmark Execution Log
 
 ```text
-==========================================
- STARTING BENCHMARK (1000 iterations)
-==========================================
+==================================================
+ XML VALIDATION BENCHMARK SUITE (1000 iterations)
+==================================================
 
---- Testing xmllint-wasm ---
-xmllint: Cold First Run: 36.237ms
-xmllint: Loop (1000 runs): 19.968s
+--------------------------------------------------
+ TEST 1: Single Schema Benchmark (sample.xsd)
+--------------------------------------------------
 
-------------------------------------------
+--- Testing xmllint-wasm (Single Schema) ---
+xmllint: Cold First Run: 29.85ms
+xmllint: Loop (1000 runs): 20.845s
 
---- Testing xerces-wasm ---
-xerces: Cold Run + Grammar Cache: 24.189ms
-xerces: Loop (1000 runs): 50.057ms
+--- Testing xerces-wasm (Single Schema) ---
+xerces: Cold Run + Grammar Cache: 23.52ms
+xerces: Loop (1000 runs): 56.88ms
+
+--------------------------------------------------
+ TEST 2: Multi-File Modular Schemas (4 XSDs with includes)
+--------------------------------------------------
+
+--- Testing xmllint-wasm (Multi-Schema) ---
+xmllint: Cold First Run: 27.247ms
+xmllint: Loop (1000 runs): 21.250s
+
+--- Testing xerces-wasm (Multi-Schema) ---
+xerces: Cold Run + Grammar Cache: 2.115ms
+xerces: Loop (1000 runs): 82.788ms
+
+==================================================
+ BENCHMARK SUITE COMPLETED
+==================================================
 ```
 
-### Key Takeaway
-`xerces-wasm` pre-parses and caches the XSD Grammar Pool in WASM memory using `createProjectValidator`. In batch or high-throughput scenarios, reusing the cached grammar pool provides a **~400x speedup** over `xmllint-wasm`.
+### 💡 Key Takeaway
+In both single-file and multi-file schema architectures, `xerces-wasm` uses `createProjectValidator` to pre-parse XSDs and cache the Grammar Pool in WASM memory. Reusing this cached pool provides a **~250x to ~360x speedup** over `xmllint-wasm` in high-throughput validation scenarios.
 
 ---
 
-##  Setup & How to Run
+## 📁 Test Files Structure
+
+```text
+tests/
+├── fixtures/
+│   ├── sample.xml            # Single XML fixture
+│   └── multi-order.xml       # Complex XML purchase order fixture
+└── schemas/
+    ├── sample.xsd            # Single XSD schema
+    └── multi/                # Modular XSD schemas
+        ├── address.xsd       # Address definition
+        ├── customer.xsd      # Includes address.xsd
+        ├── product.xsd       # Product definition
+        └── order.xsd         # Main entry schema (includes customer & product)
+```
+
+---
+
+## 🚀 Setup & How to Run
 
 ### 1. Prerequisites
 - Node.js (v18+ recommended)
@@ -54,7 +103,7 @@ npm install
 ```
 
 ### 3. Run Benchmark
-Run the benchmark script using `npm start` or directly via Node:
+Run the benchmark suite using `npm start` or directly via Node:
 
 ```bash
 npm start

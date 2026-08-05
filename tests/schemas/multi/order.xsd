@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="customer.xsd"/>
+  <xs:include schemaLocation="product.xsd"/>
+
+  <xs:complexType name="OrderType">
+    <xs:sequence>
+      <xs:element name="orderId" type="xs:string"/>
+      <xs:element name="orderDate" type="xs:dateTime"/>
+      <xs:element name="customer" type="CustomerType"/>
+      <xs:element name="items">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="item" type="ProductType" maxOccurs="unbounded"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="shippingAddress" type="AddressType"/>
+      <xs:element name="totalAmount" type="xs:decimal"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="purchaseOrder" type="OrderType"/>
+</xs:schema>

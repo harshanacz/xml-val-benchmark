@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="address.xsd"/>
+
+  <xs:complexType name="CustomerType">
+    <xs:sequence>
+      <xs:element name="id" type="xs:string"/>
+      <xs:element name="name" type="xs:string"/>
+      <xs:element name="email" type="xs:string"/>
+      <xs:element name="phone" type="xs:string"/>
+      <xs:element name="address" type="AddressType"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>

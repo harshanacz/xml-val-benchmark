@@ -3,51 +3,122 @@ import { createProjectValidator } from 'xerces-wasm';
 import fs from 'fs';
 import path from 'path';
 
-const xsdPath = path.resolve('tests/schemas/sample.xsd');
-const xmlPath = path.resolve('tests/fixtures/sample.xml');
+// --- Paths for Single Schema Benchmark ---
+const singleXsdPath = path.resolve('tests/schemas/sample.xsd');
+const singleXmlPath = path.resolve('tests/fixtures/sample.xml');
 
-const xmlContent = fs.readFileSync(xmlPath, 'utf-8');
-const xsdContent = fs.readFileSync(xsdPath, 'utf-8');
+const singleXmlContent = fs.readFileSync(singleXmlPath, 'utf-8');
+const singleXsdContent = fs.readFileSync(singleXsdPath, 'utf-8');
+
+// --- Paths for Multi-Schema Benchmark ---
+const multiSchemaDir = path.resolve('tests/schemas/multi');
+const multiXmlPath = path.resolve('tests/fixtures/multi-order.xml');
+
+const multiXmlContent = fs.readFileSync(multiXmlPath, 'utf-8');
+const multiFilesMap = {
+    'order.xsd': fs.readFileSync(path.join(multiSchemaDir, 'order.xsd'), 'utf-8'),
+    'customer.xsd': fs.readFileSync(path.join(multiSchemaDir, 'customer.xsd'), 'utf-8'),
+    'address.xsd': fs.readFileSync(path.join(multiSchemaDir, 'address.xsd'), 'utf-8'),
+    'product.xsd': fs.readFileSync(path.join(multiSchemaDir, 'product.xsd'), 'utf-8'),
+};
+const multiPreloadList = Object.entries(multiFilesMap).map(([fileName, contents]) => ({ fileName, contents }));
 
 const ITERATIONS = 1000;
 
-async function runBenchmark() {
-    console.log(`\n==========================================`);
-    console.log(` STARTING BENCHMARK (${ITERATIONS} iterations)`);
-    console.log(`==========================================\n`);
+async function runBenchmarkSuite() {
+    console.log(`==================================================`);
+    console.log(` XML VALIDATION BENCHMARK SUITE (${ITERATIONS} iterations)`);
+    console.log(`==================================================\n`);
 
-    // --- xmllint-wasm ---
-    console.log('--- Testing xmllint-wasm ---');
+    // ==================================================
+    // TEST 1: Single Schema Validation
+    // ==================================================
+    console.log(`--------------------------------------------------`);
+    console.log(` TEST 1: Single Schema Benchmark (sample.xsd)`);
+    console.log(`--------------------------------------------------\n`);
+
+    // xmllint-wasm Single
+    console.log('--- Testing xmllint-wasm (Single Schema) ---');
     console.time('xmllint: Cold First Run');
-    await xmllintValidate({ xml: xmlContent, schema: [xsdContent] });
+    await xmllintValidate({ xml: singleXmlContent, schema: [singleXsdContent] });
     console.timeEnd('xmllint: Cold First Run');
 
     console.time(`xmllint: Loop (${ITERATIONS} runs)`);
     for (let i = 0; i < ITERATIONS; i++) {
-        await xmllintValidate({ xml: xmlContent, schema: [xsdContent] });
+        await xmllintValidate({ xml: singleXmlContent, schema: [singleXsdContent] });
     }
     console.timeEnd(`xmllint: Loop (${ITERATIONS} runs)`);
 
-    console.log('\n------------------------------------------\n');
+    console.log('');
 
-    // --- xerces-wasm ---
-    console.log('--- Testing xerces-wasm ---');
+    // xerces-wasm Single
+    console.log('--- Testing xerces-wasm (Single Schema) ---');
     console.time('xerces: Cold Run + Grammar Cache');
-    const validator = await createProjectValidator({
-        entry: path.basename(xsdPath),
-        files: { [path.basename(xsdPath)]: xsdContent }
+    const singleValidator = await createProjectValidator({
+        entry: 'sample.xsd',
+        files: { 'sample.xsd': singleXsdContent }
     });
-    await validator.validate(xmlContent);
+    await singleValidator.validate(singleXmlContent);
     console.timeEnd('xerces: Cold Run + Grammar Cache');
 
     console.time(`xerces: Loop (${ITERATIONS} runs)`);
     for (let i = 0; i < ITERATIONS; i++) {
-        await validator.validate(xmlContent);
+        await singleValidator.validate(singleXmlContent);
     }
     console.timeEnd(`xerces: Loop (${ITERATIONS} runs)`);
 
-    // Free WASM C++ memory allocations
-    validator.destroy();
+    singleValidator.destroy();
+
+    // ==================================================
+    // TEST 2: Multi-File Modular Schema Validation
+    // ==================================================
+    console.log(`\n--------------------------------------------------`);
+    console.log(` TEST 2: Multi-File Modular Schemas (4 XSDs with includes)`);
+    console.log(`--------------------------------------------------\n`);
+
+    // xmllint-wasm Multi
+    console.log('--- Testing xmllint-wasm (Multi-Schema) ---');
+    console.time('xmllint: Cold First Run');
+    await xmllintValidate({
+        xml: multiXmlContent,
+        schema: [multiFilesMap['order.xsd']],
+        preload: multiPreloadList
+    });
+    console.timeEnd('xmllint: Cold First Run');
+
+    console.time(`xmllint: Loop (${ITERATIONS} runs)`);
+    for (let i = 0; i < ITERATIONS; i++) {
+        await xmllintValidate({
+            xml: multiXmlContent,
+            schema: [multiFilesMap['order.xsd']],
+            preload: multiPreloadList
+        });
+    }
+    console.timeEnd(`xmllint: Loop (${ITERATIONS} runs)`);
+
+    console.log('');
+
+    // xerces-wasm Multi
+    console.log('--- Testing xerces-wasm (Multi-Schema) ---');
+    console.time('xerces: Cold Run + Grammar Cache');
+    const multiValidator = await createProjectValidator({
+        entry: 'order.xsd',
+        files: multiFilesMap
+    });
+    await multiValidator.validate(multiXmlContent);
+    console.timeEnd('xerces: Cold Run + Grammar Cache');
+
+    console.time(`xerces: Loop (${ITERATIONS} runs)`);
+    for (let i = 0; i < ITERATIONS; i++) {
+        await multiValidator.validate(multiXmlContent);
+    }
+    console.timeEnd(`xerces: Loop (${ITERATIONS} runs)`);
+
+    multiValidator.destroy();
+
+    console.log(`\n==================================================`);
+    console.log(` BENCHMARK SUITE COMPLETED`);
+    console.log(`==================================================\n`);
 }
 
-runBenchmark().catch(console.error);
+runBenchmarkSuite().catch(console.error);

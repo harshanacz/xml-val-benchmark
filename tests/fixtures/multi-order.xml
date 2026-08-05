@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<purchaseOrder>
+  <orderId>PO-987654321</orderId>
+  <orderDate>2026-08-05T20:00:00Z</orderDate>
+  <customer>
+    <id>CUST-1001</id>
+    <name>Jane Doe</name>
+    <email>jane.doe@example.com</email>
+    <phone>+1-555-0199</phone>
+    <address>
+      <street>123 Innovation Way</street>
+      <city>Tech City</city>
+      <state>CA</state>
+      <zipCode>94016</zipCode>
+      <country>USA</country>
+    </address>
+  </customer>
+  <items>
+    <item>
+      <sku>PROD-001</sku>
+      <name>High Performance Server</name>
+      <price>2999.99</price>
+      <quantity>2</quantity>
+      <category>Hardware</category>
+    </item>
+    <item>
+      <sku>PROD-002</sku>
+      <name>Ergonomic Keyboard</name>
+      <price>149.50</price>
+      <quantity>5</quantity>
+      <category>Peripherals</category>
+    </item>
+    <item>
+      <sku>PROD-003</sku>
+      <name>UltraWide Monitor 34-inch</name>
+      <price>799.00</price>
+      <quantity>1</quantity>
+      <category>Monitors</category>
+    </item>
+  </items>
+  <shippingAddress>
+    <street>456 Enterprise Blvd</street>
+    <city>San Francisco</city>
+    <state>CA</state>
+    <zipCode>94105</zipCode>
+    <country>USA</country>
+  </shippingAddress>
+  <totalAmount>7547.48</totalAmount>
+</purchaseOrder>
