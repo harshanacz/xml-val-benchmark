@@ -1,4 +1,4 @@
-# xml-val-benchmark
+# Benchmarking XML/XSD validation performance and schema caching between xmllint-wasm (libxml2) and xerces-wasm (Apache Xerces-C++).
 
 Publication-grade multi-dimensional performance benchmark comparing WebAssembly XML validation engines: **`xmllint-wasm`** vs **`xerces-wasm`** across **Linux, macOS, and Windows** OS platforms.
 
