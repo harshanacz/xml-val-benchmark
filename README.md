@@ -4,23 +4,7 @@ Publication-grade multi-dimensional performance benchmark comparing WebAssembly 
 
 ---
 
-##  Architectural Execution Model & Trade-offs
-
-A critical finding of this benchmark is that `xmllint-wasm` and `xerces-wasm` employ fundamentally different runtime execution architectures:
-
-1. **`xmllint-wasm` (Worker-Thread Offloaded Architecture):**
-   - Every `validateXML()` call spawns a dedicated Node.js `worker_threads.Worker`, instantiates the WASM module inside it, executes validation, and tears down the worker thread.
-   - **Advantage:** **Zero Main-Thread Blocking.** Main event loop lag during validation is **<1.8 ms** even for 5MB payloads.
-   - **Trade-off:** Pays a fixed OS thread spawn and worker creation tax (~23 ms - 79 ms depending on OS) per validation call.
-
-2. **`xerces-wasm` (Synchronous Main-Thread WASM Architecture):**
-   - `createProjectValidator()` pre-parses XSD schemas and caches the compiled Grammar Pool in C++ WASM heap memory. Subsequent `validate()` calls execute synchronously on the Node.js **Main Thread**.
-   - **Advantage:** **Extreme Warm-Loop Throughput.** Eliminates worker spawn taxes and schema parsing overhead (~0.06 ms - 0.15 ms per call for standard payloads).
-   - **Trade-off:** **Main-Thread Event Loop Freezing.** Validating large payloads (e.g. 5MB) blocks the main Node.js event loop for **~145 ms - 289 ms**, freezing all incoming HTTP requests, timers, and I/O.
-
----
-
-##  Cross-Platform Performance Comparison (Node.js v22.x)
+## 🌐 Cross-Platform Performance Comparison (Node.js v22.x)
 
 Verified via automated GitHub Actions Matrix CI/CD across Ubuntu Linux, macOS, and Windows NT:
 
@@ -48,15 +32,31 @@ Verified via automated GitHub Actions Matrix CI/CD across Ubuntu Linux, macOS, a
 | | **macOS** | 34.17 ms / call | **0.14 ms / call** | **⚡ 239.2x faster** |
 | | **Windows** | 85.19 ms / call | **0.19 ms / call** | **⚡ 459.2x faster** |
 
->  **Why `xmllint-wasm` is faster on 5 MB Mass Payloads:**  
+---
+
+## 🔬 Architectural Execution Model & Trade-offs
+
+A critical finding of this benchmark is that `xmllint-wasm` and `xerces-wasm` employ fundamentally different runtime execution architectures:
+
+1. **`xmllint-wasm` (Worker-Thread Offloaded Architecture):**
+   - Every `validateXML()` call spawns a dedicated Node.js `worker_threads.Worker`, instantiates the WASM module inside it, executes validation, and tears down the worker thread.
+   - **Advantage:** **Zero Main-Thread Blocking.** Main event loop lag during validation is **<1.8 ms** even for 5MB payloads.
+   - **Trade-off:** Pays a fixed OS thread spawn and worker creation tax (~23 ms - 79 ms depending on OS) per validation call.
+
+2. **`xerces-wasm` (Synchronous Main-Thread WASM Architecture):**
+   - `createProjectValidator()` pre-parses XSD schemas and caches the compiled Grammar Pool in C++ WASM heap memory. Subsequent `validate()` calls execute synchronously on the Node.js **Main Thread**.
+   - **Advantage:** **Extreme Warm-Loop Throughput.** Eliminates worker spawn taxes and schema parsing overhead (~0.06 ms - 0.15 ms per call for standard payloads).
+   - **Trade-off:** **Main-Thread Event Loop Freezing.** Validating large payloads (e.g. 5MB) blocks the main Node.js event loop for **~145 ms - 289 ms**, freezing all incoming HTTP requests, timers, and I/O.
+
+> 💡 **Why `xmllint-wasm` is faster on 5 MB Mass Payloads:**  
 > For massive XML documents (5MB+), fixed XSD schema compilation overhead becomes negligible compared to pure XML text parsing compute time. `xmllint-wasm` uses a streaming C SAX parser that scales throughput up to **~50 MB/s**, whereas `xerces-wasm`'s current synchronous main-thread C++ parser achieves **~35 MB/s** and blocks the Node.js event loop for ~145ms–290ms during large validations.  
 >  
->  **Future Roadmap Mitigation:**  
+> 📌 **Future Roadmap Mitigation:**  
 > To address main-thread event loop freezing and high-load resilience for multi-megabyte payloads, issue [#10 (`feat: Add high-load resilience & concurrency protection (Worker Threads & Payload Guards)`)](https://github.com/harshanacz/xerces-wasm-validator/issues/10) is already listed on the `xerces-wasm` roadmap. This feature will introduce optional worker thread offloading and payload size guards to deliver high-load enterprise resilience.
 
 ---
 
-##  Detailed Module Analysis (Local Baseline: Apple M4)
+## 📊 Detailed Module Analysis (Local Baseline: Apple M4)
 
 ### Module 1: Standard Schema Validation (1,000 Iterations)
 
@@ -96,7 +96,7 @@ Verified via automated GitHub Actions Matrix CI/CD across Ubuntu Linux, macOS, a
 
 ---
 
-##  Setup & How to Run
+## 🚀 Setup & How to Run
 
 ### 1. Prerequisites
 - Node.js (v18+ recommended)
